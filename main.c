@@ -13,10 +13,24 @@
 
 extern void initialise_monitor_handles(void);	// for semi-hosting support (printf)
 
+
+//Pushbutton & States start here
+//State values of our vehicle
+#define STANDBY 0
+#define BATTLE 1
+#define ATTACKED 2
+
+//variables used for pushbutton
+volatile int state = STANDBY;
+volatile int waitingSecondPress = 0;
+volatile uint32_t firstPressTime = 0;
+volatile uint32_t chargeRequests = 0;
+
+
 int main(void)
 {
+	//This part is skeleton
 	initialise_monitor_handles(); // for semi-hosting support (printf)
-
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
 
@@ -24,24 +38,107 @@ int main(void)
 	BSP_ACCELERO_Init();
 	BSP_TSENSOR_Init();
 
+	//PB initialization here
+	BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
+	int lastState = -1;
+
+	//time checking
+	uint32_t lastSensorTime = HAL_GetTick();
 	while (1)
 	{
-		float accel_data[3];
-		int16_t accel_data_i16[3] = { 0 };			// array to store the x, y and z readings.
-		BSP_ACCELERO_AccGetXYZ(accel_data_i16);		// read accelerometer
-		// the function above returns 16 bit integers which are acceleration in mg (9.8/1000 m/s^2).
-		// Converting to float to print the actual acceleration.
-		accel_data[0] = (float)accel_data_i16[0] * (9.8/1000.0f);
-		accel_data[1] = (float)accel_data_i16[1] * (9.8/1000.0f);
-		accel_data[2] = (float)accel_data_i16[2] * (9.8/1000.0f);
+		//remember interrupt setting
+		uint32_t savedMask = __get_PRIMASK();
+		//temporarily pause the interrupts
+		__disable_irq();
 
-		float temp_data;
-		temp_data = BSP_TSENSOR_ReadTemp();			// read temperature sensor
+		//PB code starts here
+		if (waitingSecondPress && (uint32_t)(HAL_GetTick() - firstPressTime) >= 500){
+			waitingSecondPress = 0;
 
-		printf("Accel X : %f; Accel Y : %f; Accel Z : %f; Temperature : %f\n", accel_data[0], accel_data[1], accel_data[2], temp_data);
+			if(state == BATTLE){
+				chargeRequests++;
+			}
+		}
 
-		HAL_Delay(1000);	// read once a ~second.
+		int currentState = state;
+		uint32_t charges = chargeRequests;
+		chargeRequests = 0;
+
+		//restore interrupt setting
+		__set_PRIMASK(savedMask);
+
+		if(currentState != lastState){
+			if(currentState == STANDBY){
+				printf("Drone is on Standby State\n");
+			}
+			else if(currentState == BATTLE){
+				printf("Drone is on Battle State\n");
+			}
+			else{
+				printf("Drone is under Attack!");
+			}
+			lastState = currentState;
+		}
+
+		if(charges > 0){
+			printf("Charge +3/10, %lu single presses \n", (unsigned long)charges);
+		}
+
+		if(currentState == STANDBY){
+			uint32_t now = HAL_GetTick();
+
+			if((uint32_t)(now - lastSensorTime) >= 1000){
+				lastSensorTime = now;
+				//read sensor here
+			}
+
+		}
+		else if(currentState == BATTLE){
+			//battle code here
+		}
+		else if(currentState == ATTACKED){
+			//10 seconds rescue timeout
+		}
 
 	}
 
+}
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_PIN){
+	static uint32_t lastPressTime = 0;
+	static int havePreviousPress = 0;
+	if(GPIO_PIN != USER_BUTTON_PIN){
+		return;
+	}
+	uint32_t now = HAL_GetTick();
+
+	if(havePreviousPress && (uint32_t)(now - lastPressTime) < 50){
+		havePreviousPress = 1;
+		lastPressTime = now;
+		return;
+	}
+
+	//resolve an older single press if main was busy
+	if(waitingSecondPress && (uint32_t)(now - firstPressTime) >= 500){
+		waitingSecondPress = 0;
+
+		if(state == BATTLE){
+			chargeRequests++;
+		}
+	}
+
+	if(waitingSecondPress){
+		//double press
+		waitingSecondPress = 0;
+		if(state == BATTLE){
+			state = STANDBY;
+		}
+		else{
+			state = BATTLE; //from standby or rescue successful
+		}
+	}
+	else{
+		firstPressTime = now;
+		waitingSecondPress = 1;
+	}
 }
