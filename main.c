@@ -8,8 +8,12 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_accelero.h"
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_gyro.h"
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_magneto.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_tsensor.h"
-#include "stdio.h"
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_psensor.h"
+#include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01_hsensor.h"
+#include <stdio.h>
 
 extern void initialise_monitor_handles(void);	// for semi-hosting support (printf)
 
@@ -35,8 +39,12 @@ int main(void)
 	HAL_Init();
 
 	/* Peripheral initializations using BSP functions */
-	BSP_ACCELERO_Init();
-	BSP_TSENSOR_Init();
+    BSP_ACCELERO_Init();
+    BSP_GYRO_Init();
+    BSP_MAGNETO_Init();
+    BSP_TSENSOR_Init();
+    BSP_PSENSOR_Init();
+    BSP_HSENSOR_Init();
 
 	//PB initialization here
 	BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
@@ -86,11 +94,50 @@ int main(void)
 
 		if(currentState == STANDBY){
 			uint32_t now = HAL_GetTick();
-
 			if((uint32_t)(now - lastSensorTime) >= 1000){
+
 				lastSensorTime = now;
-				//read sensor here
-			}
+
+		        float accel_data[3];
+		        int16_t accel_data_i16[3] = { 0 };
+		        BSP_ACCELERO_AccGetXYZ(accel_data_i16);
+
+		        // Convert acceleration from mg to m/s^2.
+		        accel_data[0] = (float)accel_data_i16[0] * (9.8/1000.0f);
+		        accel_data[1] = (float)accel_data_i16[1] * (9.8/1000.0f);
+		        accel_data[2] = (float)accel_data_i16[2] * (9.8/1000.0f);
+
+		        float temp_data = BSP_TSENSOR_ReadTemp();
+		        float pressure_data = BSP_PSENSOR_ReadPressure();
+		        float humidity_data = BSP_HSENSOR_ReadHumidity();
+
+		        float gyro_data[3];
+		        float gyro_data_float[3] = { 0 };
+		        BSP_GYRO_GetXYZ(gyro_data_float);
+
+		        // Values are in millidegrees per second.
+		        gyro_data[0] = gyro_data_float[0];
+		        gyro_data[1] = gyro_data_float[1];
+		        gyro_data[2] = gyro_data_float[2];
+
+		        float magneto_data[3];
+		        int16_t magneto_data_i16[3] = { 0 };
+		        BSP_MAGNETO_GetXYZ(magneto_data_i16);
+
+		        // Convert magnetic field from milligauss to microtesla.
+		        magneto_data[0] = (float)magneto_data_i16[0]/10;
+		        magneto_data[1] = (float)magneto_data_i16[1]/10;
+		        magneto_data[2] = (float)magneto_data_i16[2]/10;
+
+		        printf("T: %.2f degC | P: %.2f hPa | H: %.2f %%RH\r\n"
+		               "A: X=%.2f Y=%.2f Z=%.2f m/s^2\r\n"
+		               "G: X=%.2f Y=%.2f Z=%.2f mdeg/s\r\n"
+		               "M: X=%.2f Y=%.2f Z=%.2f uT\r\n\r\n",
+		               temp_data, pressure_data, humidity_data,
+		               accel_data[0], accel_data[1], accel_data[2],
+		               gyro_data[0], gyro_data[1], gyro_data[2],
+		               magneto_data[0], magneto_data[1], magneto_data[2]);
+		    }
 
 		}
 		else if(currentState == BATTLE){
@@ -112,11 +159,12 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_PIN){
 	}
 	uint32_t now = HAL_GetTick();
 
-	if(havePreviousPress && (uint32_t)(now - lastPressTime) < 50){
-		havePreviousPress = 1;
-		lastPressTime = now;
-		return;
+	if (havePreviousPress && (uint32_t)(now - lastPressTime) < 50){
+	    return;
 	}
+
+	havePreviousPress = 1;
+	lastPressTime = now;
 
 	//resolve an older single press if main was busy
 	if(waitingSecondPress && (uint32_t)(now - firstPressTime) >= 500){
