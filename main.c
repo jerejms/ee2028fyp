@@ -65,6 +65,8 @@ int main(void)
 
 	//time checking
 	uint32_t lastSensorTime = HAL_GetTick();
+	int laserCharge = 0; // 4 means is 4/10
+	uint32_t lastLedTime = HAL_GetTick();
 
 	while (1)
 	{
@@ -91,10 +93,17 @@ int main(void)
 
 		if(currentState != lastState){
 			if(currentState == STANDBY){
-				printf("Drone is on Standby State\n");
+			    BSP_LED_On(LED2);
+			    snprintf(messagePrint, sizeof(messagePrint), "Entering STANDBY MODE\r\n");
+			    HAL_UART_Transmit(&huart1, (uint8_t*)messagePrint,strlen(messagePrint), 0xFFFF);
+			    printf("Drone is on Standby\r\n");
 			}
 			else if(currentState == BATTLE){
-				printf("Drone is on Battle State\n");
+			    BSP_LED_On(LED2);
+			    lastLedTime = HAL_GetTick();
+			    snprintf(messagePrint, sizeof(messagePrint),"Entering BATTLE MODE\r\n");
+			    HAL_UART_Transmit(&huart1, (uint8_t*)messagePrint,strlen(messagePrint), 0xFFFF);
+			    printf("Drone is ready for battle against Mr.Pandi!\r\n");
 			}
 			else if(currentState == ATTACKED){
 				rescueStartTime = HAL_GetTick();
@@ -104,10 +113,6 @@ int main(void)
 				printf("Drone is under Attack!\r\n");
 			}
 			lastState = currentState;
-		}
-
-		if(charges > 0){
-			printf("Charge +3/10, %lu single presses \n", (unsigned long)charges);
 		}
 
 		if(currentState == STANDBY){
@@ -133,7 +138,7 @@ int main(void)
 		        float gyro_data_float[3] = { 0 };
 		        BSP_GYRO_GetXYZ(gyro_data_float);
 
-		        // Values are in degrees per second.
+		        // Values are in millidegrees per second.
 		        gyro_data[0] = gyro_data_float[0];
 		        gyro_data[1] = gyro_data_float[1];
 		        gyro_data[2] = gyro_data_float[2];
@@ -159,7 +164,40 @@ int main(void)
 
 		}
 		else if(currentState == BATTLE){
-			//battle code here
+			uint32_t now = HAL_GetTick();
+
+		    // Toggle every 500 ms: one complete ON/OFF cycle per second.
+		    if ((uint32_t)(now - lastLedTime) >= 500)
+		    {
+		        lastLedTime = now;
+		        BSP_LED_Toggle(LED2);
+		    }
+
+		    // Process each single press recorded by the button code.
+		    while (charges > 0)
+		    {
+		        charges--;
+		        laserCharge += 3;
+
+		        // Fire immediately when at least 5/10 energy is available.
+		        if (laserCharge >= 5)
+		        {
+		            laserCharge -= 5;
+
+		            snprintf(messagePrint, sizeof(messagePrint),
+		                     "Laser fired! Remaining charge: %d/10\r\n",
+		                     laserCharge);
+		        }
+		        else
+		        {
+		            snprintf(messagePrint, sizeof(messagePrint),
+		                     "Laser charge: %d/10\r\n",
+		                     laserCharge);
+		        }
+
+		        HAL_UART_Transmit(&huart1, (uint8_t*)messagePrint,
+		                          strlen(messagePrint), 0xFFFF);
+		    }
 		}
 		else if(currentState == ATTACKED){
 			//10 seconds rescue timeout
@@ -191,7 +229,7 @@ int main(void)
 			else if ((uint32_t)(now - rescueStartTime) >= 10000) {
 				BSP_LED_Off(LED2);
 
-				printf("RESCUE FAILED: 10-second timeout. Kontol!\r\n");
+				printf("RESCUE FAILED: 10-second time. Kontol!\r\n");
 
 				//TODO: send final message to command centre here.
 				snprintf(messagePrint, sizeof(messagePrint),
