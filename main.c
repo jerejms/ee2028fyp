@@ -165,6 +165,8 @@ int main(void)
 		}
 		else if(currentState == BATTLE){
 			uint32_t now = HAL_GetTick();
+	    	float accel_data[3];
+	    	int16_t accel_data_i16[3] = { 0 };
 
 		    // Toggle every 500 ms: one complete ON/OFF cycle per second.
 		    if ((uint32_t)(now - lastLedTime) >= 500)
@@ -198,6 +200,16 @@ int main(void)
 		        HAL_UART_Transmit(&huart1, (uint8_t*)messagePrint,
 		                          strlen(messagePrint), 0xFFFF);
 		    }
+
+		    if((uint32_t)(now - lastSensorTime) >= 1000){
+		    	lastSensorTime = now;
+		    	BSP_ACCELERO_AccGetXYZ(accel_data_i16);
+		    	accel_data[2] = (float)accel_data_i16[2] * (9.8/1000.0f);
+
+				if (accel_data[2] < -8.0f) {
+					state = ATTACKED;
+				}
+		    }
 		}
 		else if(currentState == ATTACKED){
 			//10 seconds rescue timeout
@@ -206,6 +218,14 @@ int main(void)
 			//if rescue fail, send last message to Command Centre, and then terminate program
 
 			uint32_t now = HAL_GetTick();
+
+			if((uint32_t)(now - lastSensorTime) >= 1000){
+				lastSensorTime = now;
+				snprintf(messagePrint, sizeof(messagePrint),
+													"ANJING! DRONE ATTACKED FUCK FUCK FUCK!\r\n");
+				HAL_UART_Transmit(&huart1, (uint8_t*)messagePrint, strlen(messagePrint),0xFFFF); //Sending in normal mode
+
+			}
 
 			//rescue succeeded: return to battle
 			if (rescueSucceeded) {
@@ -242,8 +262,8 @@ int main(void)
 			}
 
 			//blink at 2 Hz: toggle every 250 ms
-			else if ((uint32_t)(now - lastSensorTime) >= 250) {
-				lastSensorTime = now;
+			if ((uint32_t)(now - lastLedTime) >= 250) {
+				lastLedTime = now;
 				BSP_LED_Toggle(LED2);
 			}
 		}
