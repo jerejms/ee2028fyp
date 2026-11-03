@@ -25,6 +25,11 @@ extern void initialise_monitor_handles(void);	// for semi-hosting support (print
 #define STANDBY 0
 #define BATTLE 1
 #define ATTACKED 2
+#define BUZZER_PORT GPIOD
+#define BUZZER_PIN  GPIO_PIN_14
+
+uint32_t lastBuzzerTime = 0;
+uint8_t buzzerState = 0;
 
 //UART initialization
 static void UART1_Init(void);
@@ -47,6 +52,20 @@ int main(void)
 	initialise_monitor_handles(); // for semi-hosting support (printf)
 	/* Reset of all peripherals, Initializes the Flash interface and the Systick. */
 	HAL_Init();
+
+	__HAL_RCC_GPIOD_CLK_ENABLE();
+
+	GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+	GPIO_InitStruct.Pin = BUZZER_PIN;
+	GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+	GPIO_InitStruct.Pull = GPIO_NOPULL;
+	GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+
+	HAL_GPIO_Init(BUZZER_PORT, &GPIO_InitStruct);
+
+	// Buzzer initially OFF
+	HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
 
 	/* Peripheral initializations using BSP functions */
     BSP_ACCELERO_Init();
@@ -109,6 +128,9 @@ int main(void)
 				rescueStartTime = HAL_GetTick();
 				lastSensorTime = rescueStartTime;
 				rescueSucceeded = 0;
+				lastBuzzerTime = HAL_GetTick();
+				buzzerState = 1;
+				HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_SET);
 				BSP_LED_Off(LED2);
 				printf("Drone is under Attack!\r\n");
 			}
@@ -229,7 +251,9 @@ int main(void)
 
 			//rescue succeeded: return to battle
 			if (rescueSucceeded) {
-				rescueStartTime = 0;
+
+				//turn off buzzer
+				HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
 				rescueSucceeded = 0;
 
 				BSP_LED_Off(LED2);
@@ -247,6 +271,11 @@ int main(void)
 
 			//timeout after 10 seconds
 			else if ((uint32_t)(now - rescueStartTime) >= 10000) {
+
+				//TURN OFF BUZZER BEFORE TERMINATION
+				HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+				buzzerState = 0;
+
 				BSP_LED_Off(LED2);
 
 				printf("RESCUE FAILED: 10-second time. Kontol!\r\n");
@@ -265,6 +294,14 @@ int main(void)
 			if ((uint32_t)(now - lastLedTime) >= 250) {
 				lastLedTime = now;
 				BSP_LED_Toggle(LED2);
+			}
+
+			if ((uint32_t)(now - lastBuzzerTime) >= 500) {
+				lastBuzzerTime = now;
+
+				buzzerState = !buzzerState;
+
+				HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, buzzerState ? GPIO_PIN_SET : GPIO_PIN_RESET);
 			}
 		}
 
