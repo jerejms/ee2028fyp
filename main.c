@@ -39,15 +39,84 @@ uint8_t buzzerState = 0;
 
 I2C_HandleTypeDef hi2c1;
 static uint8_t oledBuffer[OLED_WIDTH * OLED_PAGES];
+static const uint8_t oledFont[][5] = {
+    // A
+    {0x7E, 0x11, 0x11, 0x11, 0x7E},
+    // B
+    {0x7F, 0x49, 0x49, 0x49, 0x36},
+    // C
+    {0x3E, 0x41, 0x41, 0x41, 0x22},
+    // D
+    {0x7F, 0x41, 0x41, 0x22, 0x1C},
+    // E
+    {0x7F, 0x49, 0x49, 0x49, 0x41},
+    // F
+    {0x7F, 0x09, 0x09, 0x09, 0x01},
+    // G
+    {0x3E, 0x41, 0x49, 0x49, 0x7A},
+    // H
+    {0x7F, 0x08, 0x08, 0x08, 0x7F},
+    // I
+    {0x41, 0x41, 0x7F, 0x41, 0x41},
+    // J
+    {0x20, 0x40, 0x41, 0x3F, 0x01},
+    // K
+    {0x7F, 0x08, 0x14, 0x22, 0x41},
+    // L
+    {0x7F, 0x40, 0x40, 0x40, 0x40},
+    // M
+    {0x7F, 0x02, 0x0C, 0x02, 0x7F},
+    // N
+    {0x7F, 0x04, 0x08, 0x10, 0x7F},
+    // O
+    {0x3E, 0x41, 0x41, 0x41, 0x3E},
+    // P
+    {0x7F, 0x09, 0x09, 0x09, 0x06},
+    // Q
+    {0x3E, 0x41, 0x51, 0x21, 0x5E},
+    // R
+    {0x7F, 0x09, 0x19, 0x29, 0x46},
+    // S
+    {0x46, 0x49, 0x49, 0x49, 0x31},
+    // T
+    {0x01, 0x01, 0x7F, 0x01, 0x01},
+    // U
+    {0x3F, 0x40, 0x40, 0x40, 0x3F},
+    // V
+    {0x1F, 0x20, 0x40, 0x20, 0x1F},
+    // W
+    {0x7F, 0x20, 0x18, 0x20, 0x7F},
+    // X
+    {0x63, 0x14, 0x08, 0x14, 0x63},
+    // Y
+    {0x03, 0x04, 0x78, 0x04, 0x03},
+    // Z
+    {0x61, 0x51, 0x49, 0x45, 0x43}
+};
+static const uint8_t oledDigits[10][5] = {
+    {0x3E, 0x51, 0x49, 0x45, 0x3E}, // 0
+    {0x00, 0x42, 0x7F, 0x40, 0x00}, // 1
+    {0x42, 0x61, 0x51, 0x49, 0x46}, // 2
+    {0x21, 0x41, 0x45, 0x4B, 0x31}, // 3
+    {0x18, 0x14, 0x12, 0x7F, 0x10}, // 4
+    {0x27, 0x45, 0x45, 0x45, 0x39}, // 5
+    {0x3C, 0x4A, 0x49, 0x49, 0x30}, // 6
+    {0x01, 0x71, 0x09, 0x05, 0x03}, // 7
+    {0x36, 0x49, 0x49, 0x49, 0x36}, // 8
+    {0x06, 0x49, 0x49, 0x29, 0x1E}  // 9
+};
 
 static void I2C1_Init(void);
 static HAL_StatusTypeDef OLED_Command(uint8_t cmd);
 static HAL_StatusTypeDef OLED_Init(void);
 static HAL_StatusTypeDef OLED_TestPattern(void);
 static HAL_StatusTypeDef OLED_Update(void);
+static HAL_StatusTypeDef OLED_RenderHUD(int mode, int charge, int rescueSeconds);
 static void OLED_Clear(void);
 static void OLED_DrawPixel(int x, int y, uint8_t color);
 static void OLED_DrawProgressBar(int x, int y, int charge);
+static void OLED_DrawChar(int x, int y, char c);
+static void OLED_DrawString(int x, int y, const char *str);
 
 //UART initialization
 static void UART1_Init(void);
@@ -96,7 +165,22 @@ int main(void)
     /* UART initialization  */
     UART1_Init();
     I2C1_Init();
+
     char messagePrint[64];
+
+    HAL_Delay(200);
+
+    HAL_StatusTypeDef oledInitStatus = OLED_Init();
+
+    snprintf(messagePrint, sizeof(messagePrint),
+             "OLED INIT: %d ERR: 0x%08lX\r\n",
+             (int)oledInitStatus,
+             (unsigned long)HAL_I2C_GetError(&hi2c1));
+
+    HAL_UART_Transmit(&huart1,
+                      (uint8_t *)messagePrint,
+                      strlen(messagePrint),
+                      HAL_MAX_DELAY);
 
 	//PB initialization here
 	BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
@@ -106,6 +190,7 @@ int main(void)
 	uint32_t lastSensorTime = HAL_GetTick();
 	int laserCharge = 0; // 4 means is 4/10
 	int lastDisplayedCharge = -1;
+	int lastDisplayedState = -1;
 	uint32_t lastLedTime = HAL_GetTick();
 
 	while (1)
@@ -253,19 +338,6 @@ int main(void)
 					state = ATTACKED;
 				}
 		    }
-
-		    if (laserCharge != lastDisplayedCharge)
-		    {
-		        OLED_Clear();
-		        OLED_DrawProgressBar(5, 24, laserCharge);
-
-		        HAL_StatusTypeDef status = OLED_Update();
-
-		        if (status == HAL_OK)
-		        {
-		            lastDisplayedCharge = laserCharge;
-		        }
-		    }
 		}
 		else if(currentState == ATTACKED){
 			//10 seconds rescue timeout
@@ -338,6 +410,41 @@ int main(void)
 				HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, buzzerState ? GPIO_PIN_SET : GPIO_PIN_RESET);
 			}
 		}
+
+		int displayState = state;
+
+		uint32_t displayNow = HAL_GetTick();
+
+		uint32_t elapsed = (uint32_t)(displayNow - rescueStartTime);
+
+		int rescueSeconds = 0;
+
+		if (displayState == ATTACKED)
+		{
+		    if (elapsed < 10000U)
+		    {
+		        rescueSeconds = (int)((10000U - elapsed + 999U) / 1000U);
+		    }
+		}
+		int lastDisplayedSeconds = -1;
+
+		if (displayState != lastDisplayedState ||
+		    (displayState == BATTLE &&
+		     laserCharge != lastDisplayedCharge) ||
+		    (displayState == ATTACKED &&
+		     rescueSeconds != lastDisplayedSeconds))
+		{
+		    HAL_StatusTypeDef oledStatus =
+		        OLED_RenderHUD(displayState, laserCharge, rescueSeconds);
+
+		    if (oledStatus == HAL_OK)
+		    {
+		        lastDisplayedState = displayState;
+		        lastDisplayedCharge = laserCharge;
+		        lastDisplayedSeconds = rescueSeconds;
+		    }
+		}
+
 
 	}
 
@@ -624,6 +731,90 @@ static void OLED_DrawProgressBar(int x, int y, int charge)
             }
         }
     }
+}
+
+static void OLED_DrawChar(int x, int y, char c)
+{
+    if (c == ' ') {
+        return;
+    }
+
+    // Convert lowercase to uppercase
+    if (c >= 'a' && c <= 'z') {
+        c -= 32;
+    }
+
+
+    const uint8_t *glyph;
+
+    if (c >= 'A' && c <= 'Z')
+    {
+        glyph = oledFont[c - 'A'];
+    }
+    else if (c >= '0' && c <= '9')
+    {
+        glyph = oledDigits[c - '0'];
+    }
+    else
+    {
+        return;
+    }
+
+    for (int col = 0; col < 5; col++)
+    {
+        for (int row = 0; row < 7; row++)
+        {
+            uint8_t pixel = (glyph[col] >> row) & 1U;
+
+            OLED_DrawPixel(x + col, y + row, pixel);
+        }
+    }
+}
+
+static void OLED_DrawString(int x, int y, const char *str)
+{
+    while (*str != '\0')
+    {
+        OLED_DrawChar(x, y, *str);
+        x += 6;
+
+        str++;
+    }
+}
+
+static HAL_StatusTypeDef OLED_RenderHUD(int mode, int charge, int rescueSeconds)
+{
+    OLED_Clear();
+
+    OLED_DrawString(5, 4, "DRONE CONTROL");
+
+    if (mode == STANDBY)
+    {
+        OLED_DrawString(5, 20, "STANDBY");
+        OLED_DrawString(5, 34, "AWAITING COMMAND");
+    }
+    else if (mode == BATTLE)
+    {
+        OLED_DrawString(5, 16, "BATTLE");
+        OLED_DrawString(5, 29, "LASER CHARGE");
+        OLED_DrawProgressBar(5, 43, charge);
+    }
+
+    else if (mode == ATTACKED)
+    {
+        OLED_DrawString(5, 16, "ATTACKED");
+        OLED_DrawString(5, 28, "RESCUE REQUIRED");
+
+        char countdownText[16];
+
+        snprintf(countdownText, sizeof(countdownText),
+                 "%d SEC", rescueSeconds);
+
+        OLED_DrawString(5, 43, countdownText);
+    }
+
+
+    return OLED_Update();
 }
 
 static void I2C1_Init(void)
