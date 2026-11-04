@@ -111,15 +111,21 @@ static HAL_StatusTypeDef OLED_Command(uint8_t cmd);
 static HAL_StatusTypeDef OLED_Init(void);
 static HAL_StatusTypeDef OLED_TestPattern(void);
 static HAL_StatusTypeDef OLED_Update(void);
-static HAL_StatusTypeDef OLED_RenderHUD(int mode, int charge,
-                                        int rescueSeconds,
-                                        uint8_t laserFiring,
-                                        uint8_t warningVisible);
+static HAL_StatusTypeDef OLED_RenderHUD(
+    int mode,
+    int charge,
+    int rescueSeconds,
+    uint8_t laserFiring,
+    uint8_t warningVisible,
+    uint32_t laserElapsed
+);
 static void OLED_Clear(void);
 static void OLED_DrawPixel(int x, int y, uint8_t color);
 static void OLED_DrawProgressBar(int x, int y, int charge);
 static void OLED_DrawChar(int x, int y, char c);
 static void OLED_DrawString(int x, int y, const char *str);
+static void OLED_DrawLine(int x0, int y0, int x1, int y1);
+static void OLED_DrawLaserAnimation(uint32_t elapsed);
 
 //UART initialization
 static void UART1_Init(void);
@@ -195,6 +201,7 @@ int main(void)
 	int lastDisplayedCharge = -1;
 	int lastDisplayedState = -1;
 	int lastDisplayedSeconds = -1;
+	int lastDisplayedLaserFrame = -1;
 	uint32_t laserFiredTime = 0;
 	uint8_t laserAnimationActive = 0;
 	uint8_t lastDisplayedLaserAnimation = 0;
@@ -438,15 +445,28 @@ int main(void)
 		    }
 		}
 
-		if (laserAnimationActive &&
-		    (uint32_t)(HAL_GetTick() - laserFiredTime) >= 300U)
+
+		uint32_t laserElapsed =
+		    (uint32_t)(HAL_GetTick() - laserFiredTime);
+
+		if (laserAnimationActive && laserElapsed >= 300U)
 		{
 		    laserAnimationActive = 0;
 		}
 
+		// Frame changes every 60 ms
+		int laserFrame = laserAnimationActive
+		               ? (int)(laserElapsed / 60U)
+		               : -1;
+
+		// Limit to frames 0-4
+		if (laserFrame > 4)
+		{
+		    laserFrame = 4;
+		}
+
 		uint8_t warningVisible =
 		    (displayState == ATTACKED) ? buzzerState : 0;
-
 
 		if (displayState != lastDisplayedState ||
 		    (displayState == BATTLE &&
@@ -455,13 +475,21 @@ int main(void)
 		     rescueSeconds != lastDisplayedSeconds) ||
 		    (displayState == BATTLE &&
 		     laserAnimationActive != lastDisplayedLaserAnimation) ||
+		    (displayState == BATTLE &&
+		     laserAnimationActive &&
+		     laserFrame != lastDisplayedLaserFrame) ||
 		    (displayState == ATTACKED &&
 		     warningVisible != lastDisplayedWarning))
 		{
 		    HAL_StatusTypeDef oledStatus =
-		        OLED_RenderHUD(displayState, laserCharge,
-		                       rescueSeconds, laserAnimationActive,
-		                       warningVisible);
+		        OLED_RenderHUD(
+		            displayState,
+		            laserCharge,
+		            rescueSeconds,
+		            laserAnimationActive,
+		            warningVisible,
+		            laserElapsed
+		        );
 
 		    if (oledStatus == HAL_OK)
 		    {
@@ -469,12 +497,10 @@ int main(void)
 		        lastDisplayedCharge = laserCharge;
 		        lastDisplayedSeconds = rescueSeconds;
 		        lastDisplayedLaserAnimation = laserAnimationActive;
+		        lastDisplayedLaserFrame = laserFrame;
 		        lastDisplayedWarning = warningVisible;
 		    }
 		}
-
-
-
 
 	}
 
@@ -812,7 +838,91 @@ static void OLED_DrawString(int x, int y, const char *str)
     }
 }
 
-static HAL_StatusTypeDef OLED_RenderHUD(int mode, int charge, int rescueSeconds, uint8_t laserFiring, uint8_t warningVisible)
+static void OLED_DrawLine(int x0, int y0, int x1, int y1)
+{
+    int dx = (x1 > x0) ? (x1 - x0) : (x0 - x1);
+    int dy = (y1 > y0) ? (y1 - y0) : (y0 - y1);
+
+    int sx = (x0 < x1) ? 1 : -1;
+    int sy = (y0 < y1) ? 1 : -1;
+
+    int err = dx - dy;
+
+    while (1)
+    {
+        OLED_DrawPixel(x0, y0, 1);
+
+        if (x0 == x1 && y0 == y1)
+            break;
+
+        int e2 = 2 * err;
+
+        if (e2 > -dy)
+        {
+            err -= dy;
+            x0 += sx;
+        }
+
+        if (e2 < dx)
+        {
+            err += dx;
+            y0 += sy;
+        }
+    }
+}
+
+static void OLED_DrawLaserAnimation(uint32_t elapsed)
+{
+    // Laser emitter on the left
+    OLED_DrawLine(5, 26, 24, 26);
+    OLED_DrawLine(5, 38, 24, 38);
+    OLED_DrawLine(24, 26, 32, 32);
+    OLED_DrawLine(24, 38, 32, 32);
+
+    if (elapsed < 60)
+    {
+        // Muzzle flash
+        OLED_DrawLine(33, 32, 45, 20);
+        OLED_DrawLine(33, 32, 45, 44);
+        OLED_DrawLine(33, 32, 50, 32);
+    }
+    else if (elapsed < 180)
+    {
+        // Laser travels left to right
+        int beamX = 40 + (int)((elapsed - 60) * 75 / 120);
+
+        OLED_DrawLine(33, 31, beamX, 31);
+        OLED_DrawLine(33, 32, beamX, 32);
+        OLED_DrawLine(33, 33, beamX, 33);
+
+        // Laser tip
+        OLED_DrawLine(beamX, 27, beamX + 5, 32);
+        OLED_DrawLine(beamX, 37, beamX + 5, 32);
+    }
+    else if (elapsed < 260)
+    {
+        // Impact explosion
+        OLED_DrawLine(112, 32, 125, 20);
+        OLED_DrawLine(112, 32, 125, 44);
+        OLED_DrawLine(112, 32, 100, 18);
+        OLED_DrawLine(112, 32, 100, 46);
+        OLED_DrawLine(98, 32, 126, 32);
+        OLED_DrawLine(112, 16, 112, 48);
+    }
+    else
+    {
+        OLED_DrawString(35, 29, "RECHARGING");
+    }
+}
+
+static HAL_StatusTypeDef OLED_RenderHUD(
+    int mode,
+    int charge,
+    int rescueSeconds,
+    uint8_t laserFiring,
+    uint8_t warningVisible,
+    uint32_t laserElapsed
+)
 {
     OLED_Clear();
 
@@ -826,20 +936,17 @@ static HAL_StatusTypeDef OLED_RenderHUD(int mode, int charge, int rescueSeconds,
 
     else if (mode == BATTLE)
     {
-        OLED_DrawString(5, 16, "BATTLE");
-
         if (laserFiring)
         {
-            OLED_DrawString(5, 29, "LASER FIRED");
-            OLED_DrawString(5, 43, "DISCHARGED");
+            OLED_DrawLaserAnimation(laserElapsed);
         }
         else
         {
+            OLED_DrawString(5, 16, "BATTLE");
             OLED_DrawString(5, 29, "LASER CHARGE");
             OLED_DrawProgressBar(5, 43, charge);
         }
     }
-
 
     else if (mode == ATTACKED)
     {
