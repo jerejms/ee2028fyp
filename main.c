@@ -47,6 +47,7 @@ static HAL_StatusTypeDef OLED_TestPattern(void);
 static HAL_StatusTypeDef OLED_Update(void);
 static void OLED_Clear(void);
 static void OLED_DrawPixel(int x, int y, uint8_t color);
+static void OLED_DrawProgressBar(int x, int y, int charge);
 
 //UART initialization
 static void UART1_Init(void);
@@ -97,28 +98,6 @@ int main(void)
     I2C1_Init();
     char messagePrint[64];
 
-    // Clear framebuffer
-    OLED_Clear();
-
-    // Draw a diagonal line
-    for (int x = 0; x < OLED_WIDTH; x++)
-    {
-        OLED_DrawPixel(x, x / 2, 1);
-    }
-
-    // Transfer framebuffer to SSD1308
-    HAL_StatusTypeDef updateStatus = OLED_Update();
-
-    snprintf(messagePrint, sizeof(messagePrint),
-             "OLED Update status=%d error=0x%08lX\r\n",
-             (int)updateStatus,
-             (unsigned long)HAL_I2C_GetError(&hi2c1));
-
-    HAL_UART_Transmit(&huart1,
-                      (uint8_t *)messagePrint,
-                      strlen(messagePrint),
-                      HAL_MAX_DELAY);
-
 	//PB initialization here
 	BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
 	int lastState = -1;
@@ -126,6 +105,7 @@ int main(void)
 	//time checking
 	uint32_t lastSensorTime = HAL_GetTick();
 	int laserCharge = 0; // 4 means is 4/10
+	int lastDisplayedCharge = -1;
 	uint32_t lastLedTime = HAL_GetTick();
 
 	while (1)
@@ -272,6 +252,19 @@ int main(void)
 				if (accel_data[2] < -8.0f) {
 					state = ATTACKED;
 				}
+		    }
+
+		    if (laserCharge != lastDisplayedCharge)
+		    {
+		        OLED_Clear();
+		        OLED_DrawProgressBar(5, 24, laserCharge);
+
+		        HAL_StatusTypeDef status = OLED_Update();
+
+		        if (status == HAL_OK)
+		        {
+		            lastDisplayedCharge = laserCharge;
+		        }
 		    }
 		}
 		else if(currentState == ATTACKED){
@@ -594,6 +587,43 @@ static HAL_StatusTypeDef OLED_Update(void)
     }
 
     return HAL_OK;
+}
+
+static void OLED_DrawProgressBar(int x, int y, int charge)
+{
+    // Limit charge to 0-10
+    if (charge < 0) charge = 0;
+    if (charge > 10) charge = 10;
+
+    const int segmentWidth = 10;
+    const int segmentHeight = 16;
+    const int gap = 2;
+
+    for (int segment = 0; segment < 10; segment++)
+    {
+        int startX = x + segment * (segmentWidth + gap);
+
+        for (int dy = 0; dy < segmentHeight; dy++)
+        {
+            for (int dx = 0; dx < segmentWidth; dx++)
+            {
+                int border =
+                    (dx == 0 || dx == segmentWidth - 1 ||
+                     dy == 0 || dy == segmentHeight - 1);
+
+                int filled =
+                    (segment < charge) &&
+                    (dx > 1 && dx < segmentWidth - 2) &&
+                    (dy > 1 && dy < segmentHeight - 2);
+
+                OLED_DrawPixel(
+                    startX + dx,
+                    y + dy,
+                    (border || filled) ? 1 : 0
+                );
+            }
+        }
+    }
 }
 
 static void I2C1_Init(void)
