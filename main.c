@@ -117,7 +117,9 @@ static HAL_StatusTypeDef OLED_RenderHUD(
     int rescueSeconds,
     uint8_t laserFiring,
     uint8_t warningVisible,
-    uint32_t laserElapsed
+    uint32_t laserElapsed,
+    int crosshairX,
+    int crosshairY
 );
 static void OLED_Clear(void);
 static void OLED_DrawPixel(int x, int y, uint8_t color);
@@ -126,6 +128,14 @@ static void OLED_DrawChar(int x, int y, char c);
 static void OLED_DrawString(int x, int y, const char *str);
 static void OLED_DrawLine(int x0, int y0, int x1, int y1);
 static void OLED_DrawLaserAnimation(uint32_t elapsed);
+static void OLED_DrawRescueBar(int x, int y, int seconds);
+static void OLED_DrawRechargeAnimation(uint32_t elapsed);
+static void OLED_DrawCrosshair(int x, int y);
+static void OLED_DrawCompactChargeBar(int charge);
+
+//JOYSTICK
+#define JOYSTICK_ADDR (0x03 << 1)
+static HAL_StatusTypeDef Joystick_ReadButtons(uint8_t buttons[5]);
 
 //UART initialization
 static void UART1_Init(void);
@@ -179,6 +189,30 @@ int main(void)
 
     HAL_Delay(200);
 
+    HAL_StatusTypeDef joystickStatus =
+        HAL_I2C_IsDeviceReady(
+            &hi2c1,
+            JOYSTICK_ADDR,
+            3,
+            100
+        );
+
+    uint32_t joystickError = HAL_I2C_GetError(&hi2c1);
+
+    snprintf(messagePrint, sizeof(messagePrint),
+             "JOYSTICK: status=%d error=0x%08lX\r\n",
+             (int)joystickStatus,
+             (unsigned long)joystickError);
+
+    HAL_UART_Transmit(
+        &huart1,
+        (uint8_t *)messagePrint,
+        strlen(messagePrint),
+        HAL_MAX_DELAY
+    );
+
+    HAL_Delay(200);
+
     HAL_StatusTypeDef oledInitStatus = OLED_Init();
 
     snprintf(messagePrint, sizeof(messagePrint),
@@ -207,6 +241,15 @@ int main(void)
 	uint8_t lastDisplayedLaserAnimation = 0;
 	uint8_t lastDisplayedWarning = 0;
 	uint32_t lastLedTime = HAL_GetTick();
+	uint32_t lastJoystickTime = HAL_GetTick();
+	uint8_t joystickButtons[5] = {0};
+	uint8_t previousButtons[5] = {0};
+
+	int crosshairX = 64;
+	int crosshairY = 37;
+
+	int lastDisplayedCrosshairX = -1;
+	int lastDisplayedCrosshairY = -1;
 
 	while (1)
 	{
@@ -449,20 +492,25 @@ int main(void)
 		uint32_t laserElapsed =
 		    (uint32_t)(HAL_GetTick() - laserFiredTime);
 
-		if (laserAnimationActive && laserElapsed >= 300U)
+		if (laserAnimationActive && laserElapsed >= 900U)
 		{
 		    laserAnimationActive = 0;
 		}
 
-		// Frame changes every 60 ms
-		int laserFrame = laserAnimationActive
-		               ? (int)(laserElapsed / 60U)
-		               : -1;
+		int laserFrame = -1;
 
-		// Limit to frames 0-4
-		if (laserFrame > 4)
+		if (laserAnimationActive)
 		{
-		    laserFrame = 4;
+		    if (laserElapsed < 600U)
+		    {
+		        // Charging: 6 frames, 100 ms each
+		        laserFrame = (int)(laserElapsed / 100U);
+		    }
+		    else
+		    {
+		        // Firing: 5 frames, 60 ms each
+		        laserFrame = 6 + (int)((laserElapsed - 600U) / 60U);
+		    }
 		}
 
 		uint8_t warningVisible =
@@ -478,18 +526,23 @@ int main(void)
 		    (displayState == BATTLE &&
 		     laserAnimationActive &&
 		     laserFrame != lastDisplayedLaserFrame) ||
+			(displayState == BATTLE &&
+			 (crosshairX != lastDisplayedCrosshairX ||
+			  crosshairY != lastDisplayedCrosshairY)) ||
 		    (displayState == ATTACKED &&
 		     warningVisible != lastDisplayedWarning))
 		{
 		    HAL_StatusTypeDef oledStatus =
-		        OLED_RenderHUD(
-		            displayState,
-		            laserCharge,
-		            rescueSeconds,
-		            laserAnimationActive,
-		            warningVisible,
-		            laserElapsed
-		        );
+		    		OLED_RenderHUD(
+		    		    displayState,
+		    		    laserCharge,
+		    		    rescueSeconds,
+		    		    laserAnimationActive,
+		    		    warningVisible,
+		    		    laserElapsed,
+		    		    crosshairX,
+		    		    crosshairY
+		    		);
 
 		    if (oledStatus == HAL_OK)
 		    {
@@ -499,6 +552,60 @@ int main(void)
 		        lastDisplayedLaserAnimation = laserAnimationActive;
 		        lastDisplayedLaserFrame = laserFrame;
 		        lastDisplayedWarning = warningVisible;
+		        lastDisplayedCrosshairX = crosshairX;
+		        lastDisplayedCrosshairY = crosshairY;
+		    }
+		}
+
+		if ((uint32_t)(HAL_GetTick() - lastJoystickTime) >= 50U)
+		{
+		    lastJoystickTime = HAL_GetTick();
+
+		    if (Joystick_ReadButtons(joystickButtons) == HAL_OK)
+		    {
+		        for (int i = 0; i < 5; i++)
+		        {
+		            if (joystickButtons[i] != previousButtons[i])
+		            {
+		                snprintf(messagePrint, sizeof(messagePrint),
+		                         "JOYSTICK KEY %c: %s\r\n",
+		                         'A' + i,
+		                         joystickButtons[i] ? "PRESSED" : "RELEASED");
+
+		                HAL_UART_Transmit(
+		                    &huart1,
+		                    (uint8_t *)messagePrint,
+		                    strlen(messagePrint),
+		                    100
+		                );
+
+		                previousButtons[i] = joystickButtons[i];
+		            }
+		        }
+
+		        if (state == BATTLE)
+		        {
+		            const int step = 3;
+
+		            if (joystickButtons[0]) crosshairY -= step; // UP
+		            if (joystickButtons[2]) crosshairY += step; // DOWN
+		            if (joystickButtons[1]) crosshairX -= step; // LEFT
+		            if (joystickButtons[3]) crosshairX += step; // RIGHT
+
+		            // CENTER resets targeting position
+		            if (joystickButtons[4])
+		            {
+		                crosshairX = 64;
+		                crosshairY = 37;
+		            }
+
+		            // Keep crosshair within display
+		            if (crosshairX < 10) crosshairX = 10;
+		            if (crosshairX > 117) crosshairX = 117;
+
+		            if (crosshairY < 18) crosshairY = 18;
+		            if (crosshairY > 43) crosshairY = 43;
+		        }
 		    }
 		}
 
@@ -789,6 +896,68 @@ static void OLED_DrawProgressBar(int x, int y, int charge)
     }
 }
 
+static void OLED_DrawCompactChargeBar(int charge)
+{
+    if (charge < 0) charge = 0;
+    if (charge > 10) charge = 10;
+
+    for (int segment = 0; segment < 10; segment++)
+    {
+        int x = 5 + segment * 12;
+
+        for (int dy = 0; dy < 7; dy++)
+        {
+            for (int dx = 0; dx < 10; dx++)
+            {
+                int border =
+                    (dx == 0 || dx == 9 ||
+                     dy == 0 || dy == 6);
+
+                int filled =
+                    (segment < charge &&
+                     dx > 1 && dx < 8 &&
+                     dy > 1 && dy < 5);
+
+                OLED_DrawPixel(x + dx, 54 + dy,
+                               (border || filled) ? 1 : 0);
+            }
+        }
+    }
+}
+
+static void OLED_DrawRescueBar(int x, int y, int seconds)
+{
+    const int width = 118;
+    const int height = 10;
+
+    if (seconds < 0) seconds = 0;
+    if (seconds > 10) seconds = 10;
+
+    // Draw outline and fill
+    for (int dy = 0; dy < height; dy++)
+    {
+        for (int dx = 0; dx < width; dx++)
+        {
+            int border =
+                (dx == 0 || dx == width - 1 ||
+                 dy == 0 || dy == height - 1);
+
+            // Interior width = 116 pixels
+            int fillWidth = (seconds * (width - 2)) / 10;
+
+            int filled =
+                (dx > 0 && dx <= fillWidth &&
+                 dy > 0 && dy < height - 1);
+
+            OLED_DrawPixel(
+                x + dx,
+                y + dy,
+                (border || filled) ? 1 : 0
+            );
+        }
+    }
+}
+
 static void OLED_DrawChar(int x, int y, char c)
 {
     if (c == ' ') {
@@ -871,6 +1040,19 @@ static void OLED_DrawLine(int x0, int y0, int x1, int y1)
     }
 }
 
+static void OLED_DrawCrosshair(int x, int y)
+{
+    // Crosshair arms
+    OLED_DrawLine(x - 8, y, x - 3, y);
+    OLED_DrawLine(x + 3, y, x + 8, y);
+
+    OLED_DrawLine(x, y - 8, x, y - 3);
+    OLED_DrawLine(x, y + 3, x, y + 8);
+
+    // Center dot
+    OLED_DrawPixel(x, y, 1);
+}
+
 static void OLED_DrawLaserAnimation(uint32_t elapsed)
 {
     // Laser emitter on the left
@@ -909,11 +1091,45 @@ static void OLED_DrawLaserAnimation(uint32_t elapsed)
         OLED_DrawLine(98, 32, 126, 32);
         OLED_DrawLine(112, 16, 112, 48);
     }
-    else
+}
+
+static void OLED_DrawRechargeAnimation(uint32_t elapsed)
+{
+    // Six animation stages over 600 ms
+    int stage = (int)(elapsed / 100U);
+
+    if (stage > 5) {
+        stage = 5;
+    }
+
+    OLED_DrawString(5, 16, "LASER SYSTEM");
+    OLED_DrawString(5, 29, "RECHARGING");
+
+    // Six animated segments
+    for (int segment = 0; segment < 6; segment++)
     {
-        OLED_DrawString(35, 29, "RECHARGING");
+        int x = 5 + segment * 20;
+
+        for (int dy = 0; dy < 12; dy++)
+        {
+            for (int dx = 0; dx < 18; dx++)
+            {
+                int border =
+                    (dx == 0 || dx == 17 ||
+                     dy == 0 || dy == 11);
+
+                int filled =
+                    (segment <= stage &&
+                     dx > 1 && dx < 16 &&
+                     dy > 1 && dy < 10);
+
+                OLED_DrawPixel(x + dx, 45 + dy,
+                               (border || filled) ? 1 : 0);
+            }
+        }
     }
 }
+
 
 static HAL_StatusTypeDef OLED_RenderHUD(
     int mode,
@@ -921,35 +1137,48 @@ static HAL_StatusTypeDef OLED_RenderHUD(
     int rescueSeconds,
     uint8_t laserFiring,
     uint8_t warningVisible,
-    uint32_t laserElapsed
+    uint32_t laserElapsed,
+    int crosshairX,
+    int crosshairY
 )
 {
     OLED_Clear();
 
-    OLED_DrawString(5, 4, "DRONE CONTROL");
-
     if (mode == STANDBY)
     {
+    	OLED_DrawString(5, 4, "DRONE CONTROL");
         OLED_DrawString(5, 20, "STANDBY");
         OLED_DrawString(5, 34, "AWAITING COMMAND");
     }
 
     else if (mode == BATTLE)
     {
-        if (laserFiring)
-        {
-            OLED_DrawLaserAnimation(laserElapsed);
-        }
-        else
-        {
-            OLED_DrawString(5, 16, "BATTLE");
-            OLED_DrawString(5, 29, "LASER CHARGE");
-            OLED_DrawProgressBar(5, 43, charge);
-        }
+    	if (laserFiring)
+    	{
+    	    if (laserElapsed < 600U)
+    	    {
+    	        OLED_DrawRechargeAnimation(laserElapsed);
+    	    }
+    	    else
+    	    {
+    	        OLED_DrawLaserAnimation(laserElapsed - 600U);
+    	    }
+    	}
+
+    	else
+    	{
+    	    OLED_DrawString(5, 2, "BATTLE MODE");
+
+    	    OLED_DrawCrosshair(crosshairX, crosshairY);
+
+    	    OLED_DrawCompactChargeBar(charge);
+    	}
     }
 
     else if (mode == ATTACKED)
     {
+    	OLED_DrawString(5, 4, "DRONE CONTROL");
+
         if (warningVisible)
         {
             OLED_DrawString(5, 16, "ATTACKED");
@@ -963,6 +1192,7 @@ static HAL_StatusTypeDef OLED_RenderHUD(
                  "%d SEC", rescueSeconds);
 
         OLED_DrawString(5, 43, countdownText);
+        OLED_DrawRescueBar(5, 54, rescueSeconds);
     }
 
     return OLED_Update();
@@ -1007,6 +1237,48 @@ static void I2C1_Init(void)
         &hi2c1,
         I2C_ANALOGFILTER_ENABLE
     );
+}
+
+static HAL_StatusTypeDef Joystick_ReadButtons(uint8_t buttons[5])
+{
+    uint8_t command = 0x01; // GET_DEV_EVENT
+    uint8_t response[9];
+
+    // Select event register
+    HAL_StatusTypeDef status = HAL_I2C_Master_Transmit(
+        &hi2c1,
+        JOYSTICK_ADDR,
+        &command,
+        1,
+        100
+    );
+
+    if (status != HAL_OK)
+    {
+        return status;
+    }
+
+    // Read 4 event bytes + 5 button bytes
+    status = HAL_I2C_Master_Receive(
+        &hi2c1,
+        JOYSTICK_ADDR,
+        response,
+        sizeof(response),
+        100
+    );
+
+    if (status != HAL_OK)
+    {
+        return status;
+    }
+
+    // Bit 0: 0 = pressed, 1 = released
+    for (int i = 0; i < 5; i++)
+    {
+        buttons[i] = (response[4 + i] & 0x01U) ? 0 : 1;
+    }
+
+    return HAL_OK;
 }
 
 static void UART1_Init(void)
