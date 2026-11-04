@@ -33,13 +33,20 @@ uint8_t buzzerState = 0;
 
 //OLED
 #define OLED_ADDR (0x3C << 1)
+#define OLED_WIDTH  128
+#define OLED_HEIGHT 64
+#define OLED_PAGES  (OLED_HEIGHT / 8)
 
 I2C_HandleTypeDef hi2c1;
+static uint8_t oledBuffer[OLED_WIDTH * OLED_PAGES];
 
 static void I2C1_Init(void);
 static HAL_StatusTypeDef OLED_Command(uint8_t cmd);
 static HAL_StatusTypeDef OLED_Init(void);
 static HAL_StatusTypeDef OLED_TestPattern(void);
+static HAL_StatusTypeDef OLED_Update(void);
+static void OLED_Clear(void);
+static void OLED_DrawPixel(int x, int y, uint8_t color);
 
 //UART initialization
 static void UART1_Init(void);
@@ -90,11 +97,21 @@ int main(void)
     I2C1_Init();
     char messagePrint[64];
 
-    HAL_StatusTypeDef patternStatus = OLED_TestPattern();
+    // Clear framebuffer
+    OLED_Clear();
+
+    // Draw a diagonal line
+    for (int x = 0; x < OLED_WIDTH; x++)
+    {
+        OLED_DrawPixel(x, x / 2, 1);
+    }
+
+    // Transfer framebuffer to SSD1308
+    HAL_StatusTypeDef updateStatus = OLED_Update();
 
     snprintf(messagePrint, sizeof(messagePrint),
-             "OLED PATTERN status=%d error=0x%08lX\r\n",
-             (int)patternStatus,
+             "OLED Update status=%d error=0x%08lX\r\n",
+             (int)updateStatus,
              (unsigned long)HAL_I2C_GetError(&hi2c1));
 
     HAL_UART_Transmit(&huart1,
@@ -486,6 +503,97 @@ static HAL_StatusTypeDef OLED_TestPattern(void)
         &hi2c1, OLED_ADDR,
         displayOn, sizeof(displayOn), 100
     );
+}
+
+
+static void OLED_Clear(void)
+{
+    memset(oledBuffer, 0, sizeof(oledBuffer));
+}
+
+static void OLED_DrawPixel(int x, int y, uint8_t color)
+{
+    if (x < 0 || x >= OLED_WIDTH ||
+        y < 0 || y >= OLED_HEIGHT)
+    {
+        return;
+    }
+
+    uint16_t index = x + (y / 8) * OLED_WIDTH;
+    uint8_t mask = (uint8_t)(1U << (y % 8));
+
+    if (color)
+    {
+        oledBuffer[index] |= mask;
+    }
+    else
+    {
+        oledBuffer[index] &= (uint8_t)~mask;
+    }
+}
+
+static HAL_StatusTypeDef OLED_Update(void)
+{
+    HAL_StatusTypeDef status;
+
+    // Display follows RAM, normal display mode
+    uint8_t setup[] = {
+        0x00, 0xA4, 0xA6
+    };
+
+    status = HAL_I2C_Master_Transmit(
+        &hi2c1, OLED_ADDR,
+        setup, sizeof(setup), 100
+    );
+
+    if (status != HAL_OK) {
+        return status;
+    }
+
+    uint8_t packet[OLED_WIDTH + 1];
+
+    // Control byte: display data
+    packet[0] = 0x40;
+
+    // Transfer all 8 pages
+    for (uint8_t page = 0; page < OLED_PAGES; page++)
+    {
+        // Select page and reset column address
+        uint8_t pageCmd[] = {
+            0x00,
+            (uint8_t)(0xB0 | page),
+            0x00,
+            0x10
+        };
+
+        status = HAL_I2C_Master_Transmit(
+            &hi2c1, OLED_ADDR,
+            pageCmd, sizeof(pageCmd), 100
+        );
+
+        if (status != HAL_OK) {
+            return status;
+        }
+
+        // Copy one page from framebuffer
+        memcpy(
+            &packet[1],
+            &oledBuffer[page * OLED_WIDTH],
+            OLED_WIDTH
+        );
+
+        // Send 128 pixels columns for this page
+        status = HAL_I2C_Master_Transmit(
+            &hi2c1, OLED_ADDR,
+            packet, sizeof(packet), 200
+        );
+
+        if (status != HAL_OK) {
+            return status;
+        }
+    }
+
+    return HAL_OK;
 }
 
 static void I2C1_Init(void)
