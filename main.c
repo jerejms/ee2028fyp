@@ -31,6 +31,16 @@ extern void initialise_monitor_handles(void);	// for semi-hosting support (print
 uint32_t lastBuzzerTime = 0;
 uint8_t buzzerState = 0;
 
+//OLED
+#define OLED_ADDR (0x3C << 1)
+
+I2C_HandleTypeDef hi2c1;
+
+static void I2C1_Init(void);
+static HAL_StatusTypeDef OLED_Command(uint8_t cmd);
+static HAL_StatusTypeDef OLED_Init(void);
+static HAL_StatusTypeDef OLED_TestPattern(void);
+
 //UART initialization
 static void UART1_Init(void);
 
@@ -77,7 +87,21 @@ int main(void)
     BSP_LED_Init(LED2);
     /* UART initialization  */
     UART1_Init();
+    I2C1_Init();
     char messagePrint[64];
+
+    HAL_StatusTypeDef patternStatus = OLED_TestPattern();
+
+    snprintf(messagePrint, sizeof(messagePrint),
+             "OLED PATTERN status=%d error=0x%08lX\r\n",
+             (int)patternStatus,
+             (unsigned long)HAL_I2C_GetError(&hi2c1));
+
+    HAL_UART_Transmit(&huart1,
+                      (uint8_t *)messagePrint,
+                      strlen(messagePrint),
+                      HAL_MAX_DELAY);
+
 	//PB initialization here
 	BSP_PB_Init(BUTTON_USER, BUTTON_MODE_EXTI);
 	int lastState = -1;
@@ -350,6 +374,159 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_PIN){
 		firstPressTime = now;
 		waitingSecondPress = 1;
 	}
+}
+
+static HAL_StatusTypeDef OLED_Command(uint8_t cmd)
+{
+    uint8_t data[2] = {0x80, cmd};
+
+    return HAL_I2C_Master_Transmit(
+        &hi2c1,
+        OLED_ADDR,
+        data,
+        sizeof(data),
+        100
+    );
+}
+
+static HAL_StatusTypeDef OLED_Init(void)
+{
+    const uint8_t commands[] = {
+        0xAE,       // Display OFF
+        0xD5, 0x80, // Clock divide
+        0xA8, 0x3F, // Multiplex ratio
+        0xD3, 0x00, // Display offset
+        0x40,       // Start line
+        0x8D, 0x14, // Charge pump
+        0xA1,       // Segment remap
+        0xC8,       // COM scan direction
+        0xDA, 0x12, // COM pins
+        0x81, 0x7F, // Contrast
+        0xD9, 0xF1, // Precharge
+        0xDB, 0x40, // VCOMH
+        0xA4,       // Display follows RAM
+        0xA6,       // Normal display
+        0xAF        // Display ON
+    };
+
+    for (uint32_t i = 0; i < sizeof(commands); i++)
+    {
+        HAL_StatusTypeDef status = OLED_Command(commands[i]);
+
+        if (status != HAL_OK)
+        {
+            return status;
+        }
+    }
+
+    return HAL_OK;
+}
+
+static HAL_StatusTypeDef OLED_TestPattern(void)
+{
+    HAL_StatusTypeDef status;
+
+    // Display OFF, use RAM contents, normal display
+    uint8_t setup[] = {
+        0x00, 0xAE, 0xA4, 0xA6
+    };
+
+    status = HAL_I2C_Master_Transmit(
+        &hi2c1, OLED_ADDR,
+        setup, sizeof(setup), 100
+    );
+
+    if (status != HAL_OK) {
+        return status;
+    }
+
+    // 1 control byte + 128 pixel bytes
+    uint8_t pixels[129];
+    pixels[0] = 0x40;
+
+    // Write all 8 display pages
+    for (uint8_t page = 0; page < 8; page++)
+    {
+        // Select page and reset column address
+        uint8_t pageCmd[] = {
+            0x00,
+            (uint8_t)(0xB0 | page),
+            0x00,
+            0x10
+        };
+
+        status = HAL_I2C_Master_Transmit(
+            &hi2c1, OLED_ADDR,
+            pageCmd, sizeof(pageCmd), 100
+        );
+
+        if (status != HAL_OK) {
+            return status;
+        }
+
+        // Page 0 white, remaining pages black
+        memset(&pixels[1],
+               (page == 0) ? 0xFF : 0x00,
+               128);
+
+        status = HAL_I2C_Master_Transmit(
+            &hi2c1, OLED_ADDR,
+            pixels, sizeof(pixels), 200
+        );
+
+        if (status != HAL_OK) {
+            return status;
+        }
+    }
+
+    // Turn display ON
+    uint8_t displayOn[] = {0x00, 0xAF};
+
+    return HAL_I2C_Master_Transmit(
+        &hi2c1, OLED_ADDR,
+        displayOn, sizeof(displayOn), 100
+    );
+}
+
+static void I2C1_Init(void)
+{
+    __HAL_RCC_GPIOB_CLK_ENABLE();
+    __HAL_RCC_I2C1_CLK_ENABLE();
+
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+
+    // PB8 = I2C1_SCL, PB9 = I2C1_SDA
+    GPIO_InitStruct.Pin = GPIO_PIN_8 | GPIO_PIN_9;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_OD;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    GPIO_InitStruct.Alternate = GPIO_AF4_I2C1;
+
+    HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+    hi2c1.Instance = I2C1;
+
+    // Initial 100 kHz candidate for 4 MHz kernel clock
+    hi2c1.Init.Timing = 0x00420F13;
+
+    hi2c1.Init.OwnAddress1 = 0;
+    hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+    hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+    hi2c1.Init.OwnAddress2 = 0;
+    hi2c1.Init.OwnAddress2Masks = I2C_OA2_NOMASK;
+    hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+    hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+
+    if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+    {
+        while (1) {
+        }
+    }
+
+    HAL_I2CEx_ConfigAnalogFilter(
+        &hi2c1,
+        I2C_ANALOGFILTER_ENABLE
+    );
 }
 
 static void UART1_Init(void)
