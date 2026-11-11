@@ -417,50 +417,6 @@ void OLED_DrawRescueBar(int x, int y, int seconds)
     }
 }
 
-/* -------------------------------------------------------
- * Laser animation
- * elapsed is milliseconds since this animation started.
- * ------------------------------------------------------- */
-
-void OLED_DrawLaserAnimation(uint32_t elapsed)
-{
-    /* Laser emitter */
-    OLED_DrawLine(5, 26, 24, 26);
-    OLED_DrawLine(5, 38, 24, 38);
-    OLED_DrawLine(24, 26, 32, 32);
-    OLED_DrawLine(24, 38, 32, 32);
-
-    if (elapsed < 60)
-    {
-        /* Muzzle flash */
-        OLED_DrawLine(33, 32, 45, 20);
-        OLED_DrawLine(33, 32, 45, 44);
-        OLED_DrawLine(33, 32, 50, 32);
-    }
-    else if (elapsed < 180)
-    {
-        /* Laser travels left to right */
-        int beamX = 40 + (int)((elapsed - 60) * 75 / 120);
-
-        OLED_DrawLine(33, 31, beamX, 31);
-        OLED_DrawLine(33, 32, beamX, 32);
-        OLED_DrawLine(33, 33, beamX, 33);
-
-        OLED_DrawLine(beamX, 27, beamX + 5, 32);
-        OLED_DrawLine(beamX, 37, beamX + 5, 32);
-    }
-    else if (elapsed < 260)
-    {
-        /* Impact explosion */
-        OLED_DrawLine(112, 32, 125, 20);
-        OLED_DrawLine(112, 32, 125, 44);
-        OLED_DrawLine(112, 32, 100, 18);
-        OLED_DrawLine(112, 32, 100, 46);
-        OLED_DrawLine(98, 32, 126, 32);
-        OLED_DrawLine(112, 16, 112, 48);
-    }
-}
-
 // Called while elapsed is below the 800 ms shot duration.
 void OLED_DrawLaserAnimation(uint32_t elapsed)
 {

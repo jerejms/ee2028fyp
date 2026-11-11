@@ -1,3 +1,8 @@
+#ifndef OLED_H
+#define OLED_H
+
+#include "stm32l4xx_hal.h"
+
 #define OLED_ADDR   (0x3C << 1)
 #define OLED_WIDTH  128
 #define OLED_HEIGHT 64
