@@ -5,6 +5,7 @@
 
 void State_Init(void); // enter standby
 void State_Update(void); //process button and run current state
-uint8_t State_IsTerminated(void); //as the name follows, kill the current state
+uint8_t State_IsTerminated(void); //returns whether the system has terminated
+void State_OnJoystick(uint8_t key);
 
 #endif

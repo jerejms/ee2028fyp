@@ -10,7 +10,7 @@
 #define HUMIDITY_MAX 80.0f
 #define ACCEL_MAX 15.0f
 #define GYRO_MAX 100.0f
-#define MAGNETIC_MAX 100.0f
+#define MAGNETIC_MAX 1000.0f
 
 // return 0 if safe within range, else return 1 (warning)
 static int CheckRange(const char *name, float value, float minimum, float maximum, const char *unit){

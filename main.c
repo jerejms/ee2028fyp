@@ -7,8 +7,6 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "../../Drivers/BSP/B-L4S5I-IOT01/stm32l4s5i_iot01.h"
-#include <stdio.h>
-#include "string.h"
 
 //our structure (clean code)
 #include "buzzer.h"
@@ -17,15 +15,13 @@
 #include "sensors.h"
 #include "button.h"
 #include "state.h"
-
-extern void initialise_monitor_handles(void);	// for semi-hosting support (printf)
+#include "oled.h"
 
 // I2C bus used by the Grove 5-Way Switch
 I2C_HandleTypeDef hi2c1;
 static void I2C1_Init(void);
 
-int main(void)
-{
+int main(void){
     HAL_Init();
 
     Buzzer_Init();
@@ -35,11 +31,15 @@ int main(void)
     UART1_Init();
     I2C1_Init();
 
+
+    if (OLED_Init() != HAL_OK){
+        UART_SendText("OLED init failed\r\n");
+    }
+
     //set initial state before button interrupts
     State_Init();
     Button_Init();
 
-    char messagePrint[128];
     uint32_t lastJoystickTime = HAL_GetTick();
     uint8_t joystickButtons[5] = {0};
     uint8_t previousButtons[5] = {0};
@@ -51,26 +51,19 @@ int main(void)
             continue;
         }
 
-        /* Read the joystick every 50 ms. */
+        //read joystick every 50ms
         uint32_t now = HAL_GetTick();
 
         if ((uint32_t)(now - lastJoystickTime) >= 50U){
             lastJoystickTime = now;
 
             if (Joystick_ReadButtons(&hi2c1, joystickButtons) == HAL_OK){
-                for (int i = 0; i < 5; i++){
-                    if (joystickButtons[i] != previousButtons[i]){
-                        snprintf(
-                            messagePrint,
-                            sizeof(messagePrint),
-                            "JOYSTICK KEY %c: %s\r\n",
-                            'A' + i,
-                            joystickButtons[i] ? "PRESSED" : "RELEASED"
-                        );
-                        UART_SendText(messagePrint);
-                        previousButtons[i] = joystickButtons[i];
-                    }
-                }
+            	for (int i = 0; i < 5; i++){
+            	    if (joystickButtons[i] && !previousButtons[i]){
+            	        State_OnJoystick((uint8_t)i);
+            	    }
+            	    previousButtons[i] = joystickButtons[i];
+            	}
             }
         }
     }
