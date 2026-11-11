@@ -18,8 +18,8 @@
 #define RESCUE_TIMEOUT_MS 10000U
 #define SHOT_DURATION_MS 800U
 #define OLED_INTERVAL_MS 100U
-
-#define UPSIDE_DOWN_Z_THRESHOLD (-8.0f) //for testing purposes only
+#define ORIENTATION_INTERVAL_MS 10U
+#define UPSIDE_DOWN_GRAVITY_Z (-0.8f)
 
 typedef enum{
     STANDBY,
@@ -42,7 +42,9 @@ static uint8_t laserFiring = 0;
 
 static uint32_t laserStartTime = 0;
 static uint32_t lastOledTime = 0;
-
+static uint32_t lastOrientationTime = 0;
+//testing purposes
+static uint32_t lastOrientationLogTime = 0;
 //which sensor is highlighted (0-5)
 static int selectedSensor = 0;
 //0 = menu, 1 = showing readings.
@@ -243,6 +245,7 @@ static void EnterState(DroneState newState){
     lastSensorTime = now;
     lastLedTime = now;
     lastBuzzerTime = now;
+    lastOrientationTime = now;
 
     buzzerState = 0;
     Buzzer_Off();
@@ -343,10 +346,30 @@ void State_Update(void){
             lastLedTime = now;
             BSP_LED_Toggle(LED2);
         }
-        if ((uint32_t)(now - lastSensorTime)>= SENSOR_INTERVAL_MS){
-            lastSensorTime = now;
-            float accelerationZ = Sensors_ReadAccelerationZ();
-            if (accelerationZ < UPSIDE_DOWN_Z_THRESHOLD){
+        if ((uint32_t)(now - lastOrientationTime) >= ORIENTATION_INTERVAL_MS)
+        {
+            uint32_t elapsedMs = (uint32_t)(now - lastOrientationTime);
+            lastOrientationTime = now;
+
+            float dt = elapsedMs / 1000.0f;
+
+            float gravityZ = Sensors_ReadGravityZ(dt);
+            // Diagnostic logging every 200 ms
+            if ((uint32_t)(now - lastOrientationLogTime) >= 200U)
+            {
+            	lastOrientationLogTime = now;
+
+                char message[96];
+
+                snprintf(message, sizeof(message),
+                         "GRAVITYZ=%.2f DT=%.3f\r\n",
+                         gravityZ, dt);
+
+                UART_SendText(message);
+            }
+            // Initial upside-down detection
+            if (gravityZ < UPSIDE_DOWN_GRAVITY_Z)
+            {
                 EnterState(ATTACKED);
             }
         }

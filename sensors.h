@@ -13,5 +13,7 @@ typedef struct{
 void Sensors_Init(void);
 void Sensors_Read(SensorReadings *readings);
 float Sensors_ReadAccelerationZ(void);
+void Sensors_ResetGravityFilter(void);
+float Sensors_ReadGravityZ(float dt);
 
 #endif
