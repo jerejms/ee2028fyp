@@ -43,8 +43,6 @@ static uint8_t laserFiring = 0;
 static uint32_t laserStartTime = 0;
 static uint32_t lastOledTime = 0;
 static uint32_t lastOrientationTime = 0;
-//testing purposes
-static uint32_t lastOrientationLogTime = 0;
 //which sensor is highlighted (0-5)
 static int selectedSensor = 0;
 //0 = menu, 1 = showing readings.
@@ -258,6 +256,7 @@ static void EnterState(DroneState newState){
         ShowStandbyScreen();
     }
     else if (currentState == BATTLE){
+    	Sensors_ResetGravityFilter();
         BSP_LED_On(LED2);
         UART_SendText("Entering BATTLE MODE\r\n");
     }
@@ -354,20 +353,7 @@ void State_Update(void){
             float dt = elapsedMs / 1000.0f;
 
             float gravityZ = Sensors_ReadGravityZ(dt);
-            // Diagnostic logging every 200 ms
-            if ((uint32_t)(now - lastOrientationLogTime) >= 200U)
-            {
-            	lastOrientationLogTime = now;
 
-                char message[96];
-
-                snprintf(message, sizeof(message),
-                         "GRAVITYZ=%.2f DT=%.3f\r\n",
-                         gravityZ, dt);
-
-                UART_SendText(message);
-            }
-            // Initial upside-down detection
             if (gravityZ < UPSIDE_DOWN_GRAVITY_Z)
             {
                 EnterState(ATTACKED);
